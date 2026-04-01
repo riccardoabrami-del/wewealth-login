@@ -1,0 +1,14 @@
+{
+  "name": "wewealth-login",
+  "version": "1.0.0",
+  "description": "Automazione login we-wealth con Playwright e GitHub Actions",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "imap": "^0.8.19",
+    "mailparser": "^3.7.2",
+    "playwright": "^1.52.0"
+  }
+}
