@@ -236,7 +236,7 @@ async function sendLoginSuccessEmail(screenshotPath) {
 
   await transporter.sendMail({
     from: user,
-    to: 'milanotoonight@gmail.com',
+    to: 'team-it@we-wealth.com',
     subject: 'login fatta correttamente',
     text: 'Login fatta correttamente',
     attachments: [
