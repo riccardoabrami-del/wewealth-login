@@ -2,28 +2,16 @@ const { chromium, devices } = require('playwright');
 const fs = require('fs');
 const Imap = require('imap');
 const { simpleParser } = require('mailparser');
+const nodemailer = require('nodemailer');
 
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function extractOtp(text) {
-  if (!text) return null;
-  const patterns = [
-    /\b(\d{6})\b/,
-    /codice[^0-9]{0,20}(\d{6})/i,
-    /otp[^0-9]{0,20}(\d{6})/i,
-    /verification code[^0-9]{0,20}(\d{6})/i
-  ];
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) return match[1];
-  }
-  return null;
-}
-
 async function saveDebug(page, name) {
-  try { await page.screenshot({ path: `${name}.png`, fullPage: true }); } catch (_) {}
+  try {
+    await page.screenshot({ path: `${name}.png`, fullPage: true });
+  } catch (_) {}
   try {
     const html = await page.content();
     fs.writeFileSync(`${name}.html`, html || '', 'utf8');
@@ -34,7 +22,10 @@ async function saveDebug(page, name) {
 async function jsClick(page, selector) {
   return page.evaluate((sel) => {
     const el = document.querySelector(sel);
-    if (el) { el.click(); return true; }
+    if (el) {
+      el.click();
+      return true;
+    }
     return false;
   }, selector);
 }
@@ -50,6 +41,7 @@ async function closePossibleOverlays(page) {
     '.cookie-accept',
     '.cookie-banner-accept'
   ];
+
   for (const sel of selectors) {
     try {
       const loc = page.locator(sel).first();
@@ -62,17 +54,45 @@ async function closePossibleOverlays(page) {
 }
 
 function getGmailCreds() {
-  const user = process.env.EMAIL_USER || process.env.email_user || process.env.GMAIL_USER || '';
-  const pass = process.env.EMAIL_APP_PASSWORD || process.env.EMAIL_USER_PASSWORD || process.env.gmail_app_password || '';
+  const user =
+    process.env.EMAIL_USER ||
+    process.env.email_user ||
+    process.env.GMAIL_USER ||
+    '';
+  const pass =
+    process.env.EMAIL_APP_PASSWORD ||
+    process.env.EMAIL_USER_PASSWORD ||
+    process.env.gmail_app_password ||
+    '';
   return { user, pass };
+}
+
+function extractOtp(text) {
+  if (!text) return null;
+
+  const patterns = [
+    /\b(\d{6})\b/,
+    /codice[^0-9]{0,20}(\d{6})/i,
+    /otp[^0-9]{0,20}(\d{6})/i,
+    /verification code[^0-9]{0,20}(\d{6})/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[1];
+  }
+
+  return null;
 }
 
 async function readLatestOtpFromGmailIMAP(expectedEmail) {
   const { user, pass } = getGmailCreds();
+
   if (!user || !pass) {
     console.log('[IMAP] Credenziali Gmail non presenti.');
     return null;
   }
+
   return new Promise((resolve) => {
     const imap = new Imap({
       user,
@@ -84,7 +104,9 @@ async function readLatestOtpFromGmailIMAP(expectedEmail) {
       authTimeout: 30000,
       tlsOptions: { rejectUnauthorized: false }
     });
+
     let resolved = false;
+
     const done = (value) => {
       if (!resolved) {
         resolved = true;
@@ -92,30 +114,62 @@ async function readLatestOtpFromGmailIMAP(expectedEmail) {
         resolve(value);
       }
     };
+
     imap.once('ready', () => {
       imap.openBox('INBOX', true, (err) => {
-        if (err) { console.error('[IMAP] Errore openBox:', err); return done(null); }
+        if (err) {
+          console.error('[IMAP] Errore openBox:', err);
+          return done(null);
+        }
+
         imap.search(['ALL'], (err, results) => {
-          if (err) { console.error('[IMAP] Errore search:', err); return done(null); }
-          if (!results || !results.length) { console.log('[IMAP] Nessuna email trovata.'); return done(null); }
+          if (err) {
+            console.error('[IMAP] Errore search:', err);
+            return done(null);
+          }
+
+          if (!results || !results.length) {
+            console.log('[IMAP] Nessuna email trovata.');
+            return done(null);
+          }
+
           const latestIds = results.slice(-10);
           const fetch = imap.fetch(latestIds, { bodies: '' });
           const emails = [];
+
           fetch.on('message', (msg) => {
             let rawBuffer = '';
-            msg.on('body', (stream) => { stream.on('data', (chunk) => { rawBuffer += chunk.toString('utf8'); }); });
-            msg.once('attributes', (attrs) => { emails.push({ raw: () => rawBuffer, date: attrs.date || new Date(0) }); });
+
+            msg.on('body', (stream) => {
+              stream.on('data', (chunk) => {
+                rawBuffer += chunk.toString('utf8');
+              });
+            });
+
+            msg.once('attributes', (attrs) => {
+              emails.push({
+                raw: () => rawBuffer,
+                date: attrs.date || new Date(0)
+              });
+            });
           });
-          fetch.once('error', (err) => { console.error('[IMAP] Errore fetch:', err); done(null); });
+
+          fetch.once('error', (err) => {
+            console.error('[IMAP] Errore fetch:', err);
+            done(null);
+          });
+
           fetch.once('end', async () => {
             try {
               emails.sort((a, b) => new Date(b.date) - new Date(a.date));
+
               for (const item of emails) {
                 const mail = await simpleParser(item.raw());
                 const subject = mail.subject || '';
                 const text = mail.text || '';
                 const html = typeof mail.html === 'string' ? mail.html : '';
                 const combined = `${subject}\n${text}\n${html}`;
+
                 const lower = combined.toLowerCase();
                 const isRelevant =
                   lower.includes('we-wealth') ||
@@ -123,19 +177,36 @@ async function readLatestOtpFromGmailIMAP(expectedEmail) {
                   lower.includes('otp') ||
                   lower.includes('codice') ||
                   lower.includes(expectedEmail.toLowerCase());
+
                 if (!isRelevant) continue;
+
                 const otp = extractOtp(combined);
-                if (otp) { console.log(`[IMAP] OTP trovata: ${otp}`); return done(otp); }
+                if (otp) {
+                  console.log(`[IMAP] OTP trovata: ${otp}`);
+                  return done(otp);
+                }
               }
+
               console.log('[IMAP] Nessuna OTP trovata nelle ultime email.');
               done(null);
-            } catch (e) { console.error('[IMAP] Errore parsing email:', e); done(null); }
+            } catch (e) {
+              console.error('[IMAP] Errore parsing email:', e);
+              done(null);
+            }
           });
         });
       });
     });
-    imap.once('error', (err) => { console.error('[IMAP] Errore connessione IMAP:', err); done(null); });
-    imap.once('end', () => { if (!resolved) done(null); });
+
+    imap.once('error', (err) => {
+      console.error('[IMAP] Errore connessione IMAP:', err);
+      done(null);
+    });
+
+    imap.once('end', () => {
+      if (!resolved) done(null);
+    });
+
     imap.connect();
   });
 }
@@ -150,17 +221,46 @@ async function pollOtpFromGmail(expectedEmail, attempts = 12, delayMs = 10000) {
   return null;
 }
 
-async function waitForWelcomeScreen(page) {
+async function sendLoginSuccessEmail(screenshotPath) {
+  const { user, pass } = getGmailCreds();
+
+  if (!user || !pass) {
+    console.log('[MAIL] Credenziali Gmail non presenti, salto invio email.');
+    return;
+  }
+
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user, pass }
+  });
+
+  await transporter.sendMail({
+    from: user,
+    to: 'milanotoonight@gmail.com',
+    subject: 'login fatta correttamente',
+    text: 'Login fatta correttamente',
+    attachments: [
+      {
+        filename: 'login-success.png',
+        path: screenshotPath
+      }
+    ]
+  });
+
+  console.log('[MAIL] Email inviata con screenshot allegato.');
+}
+
+async function waitForWelcomeAfterOtp(page) {
   for (let i = 0; i < 25; i++) {
-    const greenCheckVisible = await page.locator('img[src*="green-check"]').first().isVisible().catch(() => false);
+    const greenCheckVisible = await page.locator('img[src*="green-check"], img[src*="green-check.png"]').first().isVisible().catch(() => false);
     const welcomeVisible =
       greenCheckVisible ||
       await page.locator('text=/ben tornato/i').first().isVisible().catch(() => false) ||
       await page.locator('text=/bentornato/i').first().isVisible().catch(() => false) ||
-      await page.locator('text=/welcome back/i').first().isVisible().catch(() => false) ||
-      await page.locator('text=/Thank you/i').first().isVisible().catch(() => false) ||
-      await page.locator('button:has-text("COMPLETE"), button:has-text("CLOSE")').first().isVisible().catch(() => false);
+      await page.locator('text=/welcome back/i').first().isVisible().catch(() => false);
+
     if (welcomeVisible) return true;
+
     await wait(1500);
   }
   return false;
@@ -169,16 +269,22 @@ async function waitForWelcomeScreen(page) {
 async function main() {
   const desktop = devices['Desktop Chrome'];
   const browser = await chromium.launch({ headless: true });
+
   const context = await browser.newContext({
     ...desktop,
     viewport: { width: 1440, height: 900 },
     locale: 'it-IT',
     timezoneId: 'Europe/Rome'
   });
+
   const page = await context.newPage();
 
   try {
-    await page.goto('https://www.we-wealth.com', { waitUntil: 'domcontentloaded', timeout: 120000 });
+    await page.goto('https://www.we-wealth.com', {
+      waitUntil: 'domcontentloaded',
+      timeout: 120000
+    });
+
     await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
     await wait(8000);
     await saveDebug(page, 'login-01-home');
@@ -191,8 +297,11 @@ async function main() {
     await saveDebug(page, 'login-02-after-cookie');
 
     const accediClicked = await jsClick(page, 'a.btn-accedi.otp-popup-button');
-    if (!accediClicked) throw new Error('Non trovato a.btn-accedi.otp-popup-button nel DOM');
+    if (!accediClicked) {
+      throw new Error('Non trovato a.btn-accedi.otp-popup-button nel DOM');
+    }
     console.log('Link Accedi cliccato via JS.');
+
     await wait(3000);
     await saveDebug(page, 'login-03-after-accedi');
 
@@ -204,7 +313,9 @@ async function main() {
         await page.locator('#otp-submit-button').waitFor({ state: 'visible', timeout: 10000 });
         await jsClick(page, '#otp-submit-button');
         console.log('Bottone otp-submit-button cliccato (dopo attesa).');
-      } catch (_) { console.log('otp-submit-button non trovato, procedo.'); }
+      } catch (_) {
+        console.log('otp-submit-button non trovato, procedo.');
+      }
     }
 
     await wait(3000);
@@ -227,15 +338,20 @@ async function main() {
     console.log('OTP inviata — attendo via IMAP...');
 
     const otp = await pollOtpFromGmail(email, 12, 10000);
-    if (!otp) throw new Error('OTP non trovata nelle email.');
+
+    if (!otp) {
+      throw new Error('OTP non trovata nelle email.');
+    }
 
     console.log(`OTP letta: ${otp}`);
+
     await page.bringToFront();
 
     const otpInput = page.locator('#otp-code, input[name="otp"], input[type="tel"]').first();
     await otpInput.waitFor({ state: 'visible', timeout: 20000 });
     await otpInput.fill(otp);
     console.log('OTP inserita nel campo.');
+
     await wait(1000);
 
     const confermaBtn = page.locator('#otp-check-button');
@@ -246,14 +362,18 @@ async function main() {
     await wait(2000);
     await saveDebug(page, 'login-06-after-otp');
 
-    const ok = await waitForWelcomeScreen(page);
-    if (!ok) throw new Error('La schermata di bentornato / check verde non e comparsa.');
+    const ok = await waitForWelcomeAfterOtp(page);
+    if (!ok) {
+      throw new Error('La schermata di bentornato / check verde non è comparsa.');
+    }
 
     await wait(2000);
     const finalShot = 'login-success.png';
     await page.screenshot({ path: finalShot, fullPage: true });
     console.log(`[SCREENSHOT] Screenshot login salvato: ${finalShot}`);
+
     await saveDebug(page, 'login-07-welcome-success');
+    await sendLoginSuccessEmail(finalShot);
 
     console.log('Script login completato con successo.');
   } catch (error) {
