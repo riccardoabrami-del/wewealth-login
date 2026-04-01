@@ -1,0 +1,51 @@
+name: WeWealth Login
+
+on:
+  workflow_dispatch:
+    inputs:
+      headless:
+        description: "Esegui in headless mode"
+        required: true
+        default: true
+        type: boolean
+  schedule:
+    - cron: "0 5 * * *"  # Ogni giorno alle 07:00 ora italiana (CEST = UTC+2)
+
+jobs:
+  run-login:
+    runs-on: ubuntu-latest
+
+    env:
+      TARGET_URL: "https://www.we-wealth.com"
+      HEADLESS: ${{ inputs.headless }}
+      EMAIL_USER: ${{ secrets.EMAIL_USER }}
+      EMAIL_USER_PASSWORD: ${{ secrets.EMAIL_USER_PASSWORD }}
+      EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run WeWealth login
+        run: node main.js
+
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: |
+            *.png
+            *.html
+          retention-days: 7
